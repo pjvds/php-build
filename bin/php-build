@@ -24,7 +24,7 @@
 # fail once a command invocation itself fails.
 set -e
 
-# This is the usage message, like it's done in 
+# This is the usage message, like it's done in
 # [shocco](https://github.com/rtomayko/shocco).
 #
 #/ php-build, Compile and Install PHP
@@ -43,6 +43,7 @@ set -e
 #/   --definitions: Lists all available definitions
 #/   --ini|i:       Specifies which php.ini-<environment> from the
 #/                  source distribution is used as default php.ini
+#/   --verbose:     Outputs all tooling output to console.
 #/
 
 # Set the `PHP_BUILD_DEBUG` environment variable to
@@ -56,6 +57,10 @@ fi
 # errors on FD2 to a file and use FD3 for php-build's
 # visible error messages.
 exec 3<&2
+
+# Set the output pipe that receives the tooling output
+# to /dev/null. A user can override this with the '--verbose' option
+output_pipe='/dev/null'
 
 # Simpe function for resolving a
 # relative path to an absolute one
@@ -85,7 +90,7 @@ function realpath {
 # is treated as the base for the `share/` and `tmp/`
 # folders of php-build.
 PHP_BUILD_ROOT="$(realpath "$0")/.."
-TMP="$(dirname $(mktemp --dry-run 2>/dev/null || echo "/var/tmp/tmp_dir"))/php-build"
+TMP="$(dirname $(mktemp --dry-run 2>$output_pipe || echo "/var/tmp/tmp_dir"))/php-build"
 
 # This file gets copied to `$PREFIX/etc/php.ini` once
 # the build is complete. This is by default the PHP tarball's
@@ -158,9 +163,9 @@ function http() {
     local url="$2"
     [ -n "$url" ] || return 1
 
-    if type curl &>/dev/null; then
+    if type curl &>$output_pipe; then
         "http_${method}_curl" "$url"
-    elif type wget &>/dev/null; then
+    elif type wget &>$output_pipe; then
         "http_${method}_wget" "$url"
     else
         echo "error: please install \`curl\` or \`wget\` and try again" >&2
@@ -259,7 +264,7 @@ function download_from_github {
         rm "$temp_package"
     fi
 
-    http get "$url" > $temp_package
+    http get "$url" >$temp_package
     cp "$temp_package" "$TMP/packages"
     rm "$temp_package"
 
@@ -361,7 +366,7 @@ function build_package {
         make
         make install
         make clean
-    } > /dev/null
+    } >$output_pipe
     cd "$cwd"
 
     # Remove .dSYM extension from executables (OSX issue).
@@ -403,7 +408,7 @@ function install_package {
         download $url
         cd "$TMP/source/$DEFINITION"
         build_package
-        cd - > /dev/null
+        cd - >$output_pipe
     } >&4 2>&1
 }
 
@@ -420,7 +425,7 @@ function install_package_from_github {
         download_from_github "$branch" "$repo"
         cd "$TMP/source/$DEFINITION"
         build_package
-        cd - > /dev/null
+        cd - >$output_pipe
     } >&4 2>&1
 }
 
@@ -575,7 +580,7 @@ $CONFIGURE_OPTIONS"
         export ac_cv_exeext=''
     fi
 
-    ./configure $argv > /dev/null
+    ./configure $argv >$output_pipe
 
     # Use php-build prefix for the Apache libexec folder
     cat <<EOF | patch -N -p1 -s || true
@@ -611,7 +616,7 @@ function build_error {
 
     # Removes the prefix when the build fails.
     if [ -z "$PHP_BUILD_DEBUG" ]; then
-        cleanup_abort > /dev/null
+        cleanup_abort >$output_pipe
     fi
 }
 
@@ -620,7 +625,7 @@ function cleanup_abort {
 
     rm -rf "$PREFIX"
 
-    make -C "$TMP/source/$DEFINITION" clean &> /dev/null
+    make -C "$TMP/source/$DEFINITION" clean &>$output_pipe
 }
 
 function find_definition {
@@ -678,6 +683,12 @@ if [ "$1" = "--definitions" ]; then
     exit
 fi
 
+eval last=\${$#}
+if [ "$last" = "--verbose" ]; then
+    log 'verbose logging enabled'
+    output_pipe="/dev/tty"
+fi
+
 # If `-i` or `--ini` is given as first argument, then
 # treat the second argument as `php.ini` file.
 if [ "$1" = "-i" ] || [ "$1" = "--ini" ]; then
@@ -713,7 +724,7 @@ if [ "$ENABLE_PEAR" = "1" ]; then
     with_pear
 fi
 
-if ! find_definition "$DEFINITION" > /dev/null; then
+if ! find_definition "$DEFINITION" >$output_pipe; then
     log Error "Definition $DEFINITION not found."
     exit $E_DEFINITION_NOT_FOUND
 fi
